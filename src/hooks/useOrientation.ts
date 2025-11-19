@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { accelerometer, SensorTypes, setUpdateIntervalForType } from 'react-native-sensors';
-import { Subscription } from 'rxjs';
+import { useEffect, useState, useCallback } from 'react';
+import { DeviceMotion } from 'expo-sensors';
+import { Platform } from 'react-native';
 import { AngleConfig } from '@types';
 import {
   Orientation,
@@ -27,12 +27,16 @@ export const useOrientation = (config?: AngleConfig, enabled = true): UseOrienta
       return;
     }
 
-    setUpdateIntervalForType(SensorTypes.accelerometer, 120);
-    let subscription: Subscription | undefined;
+    if (Platform.OS !== 'web') {
+      DeviceMotion.setUpdateInterval(100);
+    }
+    
+    let subscription: { remove: () => void } | undefined;
 
-    subscription = accelerometer.subscribe(
-      ({ x, y, z }) => {
-        const nextOrientation = calculateOrientationFromAccelerometer(x, y, z);
+    const handleMotionUpdate = (motionData: any) => {
+      if (motionData.rotation) {
+        const { alpha, beta, gamma } = motionData.rotation;
+        const nextOrientation = calculateOrientationFromAccelerometer(alpha, beta, gamma);
         setOrientation(nextOrientation);
         const nextScore = getAlignmentScore(nextOrientation, config);
         setScore(nextScore);
@@ -45,15 +49,31 @@ export const useOrientation = (config?: AngleConfig, enabled = true): UseOrienta
         } else {
           setDescriptor('far');
         }
-      },
-      (error) => {
-        console.warn('Sensor error', error);
+      }
+    };
+
+    const handleError = (error: any) => {
+      console.warn('Sensor error', error);
+      setHasSensorAccess(false);
+    };
+
+    // Request permission and start listening
+    (async () => {
+      try {
+        const { status } = await DeviceMotion.requestPermissionsAsync();
+        if (status === 'granted') {
+          subscription = DeviceMotion.addListener(handleMotionUpdate);
+        } else {
+          setHasSensorAccess(false);
+        }
+      } catch (error) {
+        console.warn('Failed to get motion permission', error);
         setHasSensorAccess(false);
       }
-    );
+    })();
 
     return () => {
-      subscription?.unsubscribe();
+      subscription?.remove();
     };
   }, [config, enabled]);
 
